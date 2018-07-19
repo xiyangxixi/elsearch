@@ -1,0 +1,100 @@
+# elaticsearch单机与集群 
+# 参考：https://www.cnblogs.com/kevingrace/p/7693422.html 历史版本下载：https://www.elastic.co/downloads/past-releases
+# 基础的防火墙、selinux自行设置 集群采用奇数台服务器，此处采用3台。
+# 192.168.29.101 192.168.29.102 192.168.29.103
+1、安装java 我用的jdk8rpm安装，并设置环境变量 3台
+JAVA_HOME=/usr/java/jdk1.8.0_91
+JRE_HOME=/usr/java/jdk1.8.0_91/jre
+PATH=$PATH:$JAVA_HOME/bin:$JRE_HOME/bin
+CLASSPATH=.:$JAVA_HOME/lib/dt.jar:$JAVA_HOME/lib/tools.jar:$JRE_HOME/lib
+export JAVA_HOME JRE_HOME PATH CLASSPATH
+2、下载并安装elasticsearch 3台
+rpm -ivh elasticsearch-5.6.9.rpm
+3、修改配置文件(192.168.29.101),另外两台修改node.name和network.host 3台
+[root@ansible-k8s1 data]# cat /etc/elasticsearch/elasticsearch.yml |egrep -v '^$|#'
+cluster.name: k8s
+node.name: ansible-k8s1
+path.data: /data/es-data
+path.logs: /data/es-logs
+network.host: 192.168.29.101
+http.port: 9200
+discovery.zen.ping.unicast.hosts: ["192.168.29.101", "192.168.29.102","192.168.29.103"]
+4、创建数据和日志文件夹 3台
+mkdir -pv /data/{es-data,es-logs}
+chown -R elasticsearch.elasticsearch /data/es-data
+5、启动 3台
+systemctl daemon-reload
+systemctl start elasticsearch
+systemctl status elasticsearch
+6、查看端口状况 ss-tnl 查看9200和9300
+[root@ansible-k8s1 data]# ss -tnl
+State       Recv-Q Send-Q                     Local Address:Port                                    Peer Address:Port
+LISTEN      0      128                            127.0.0.1:10250                                              *:*
+LISTEN      0      128                            127.0.0.1:2379                                               *:*
+LISTEN      0      128                            127.0.0.1:2380                                               *:*
+LISTEN      0      128                            127.0.0.1:10255                                              *:*
+LISTEN      0      128                            127.0.0.1:8080                                               *:*
+LISTEN      0      128                                    *:22                                                 *:*
+LISTEN      0      100                            127.0.0.1:25                                                 *:*
+LISTEN      0      128                            127.0.0.1:10248                                              *:*
+LISTEN      0      128                            127.0.0.1:10249                                              *:*
+LISTEN      0      128                                   :::10251                                             :::*
+LISTEN      0      128                                   :::6443                                              :::*
+LISTEN      0      128                                   :::10252                                             :::*
+LISTEN      0      128                ::ffff:192.168.29.101:9200                                              :::*
+LISTEN      0      128                ::ffff:192.168.29.101:9300                                              :::*
+LISTEN      0      128                                   :::22                                                :::*
+LISTEN      0      100                                  ::1:25                                                :::*
+LISTEN      0      128                                   :::4194   
+7、检查集群、节点、master状态
+
+# 集群状态 带*号为master
+[root@ansible-k8s1 data]# curl -XGET 'http://192.168.29.101:9200/_cat/nodes'
+192.168.29.101 3 82 11 0.44 2.57 4.75 mdi * ansible-k8s1
+192.168.29.102 4 96  2 0.00 0.10 0.23 mdi - ansible-k8s2
+192.168.29.103 4 76  1 0.00 0.04 0.17 mdi - ansible-k8s3
+
+#详细
+[root@ansible-k8s1 data]# curl -XGET 'http://192.168.29.101:9200/_cat/nodes?v'
+ip             heap.percent ram.percent cpu load_1m load_5m load_15m node.role master name
+192.168.29.101            3          82  11    0.44    2.57     4.75 mdi       *      ansible-k8s1
+192.168.29.102            4          96   2    0.00    0.10     0.23 mdi       -      ansible-k8s2
+192.168.29.103            4          76   1    0.00    0.04     0.17 mdi       -      ansible-k8s3
+
+#集群状态
+[root@ansible-k8s1 data]# curl -XGET 'http://192.168.29.101:9200/_cluster/state/nodes?pretty'
+{
+  "cluster_name" : "k8s",
+  "nodes" : {
+    "j_Gv7OJFSS-wu_jLxw7wNQ" : {
+      "name" : "ansible-k8s1",
+      "ephemeral_id" : "2jvwN9j4T_SnH0LoLls8vA",
+      "transport_address" : "192.168.29.101:9300",
+      "attributes" : { }
+    },
+    "ByHfm2pRSTGzg6BNYDKXQw" : {
+      "name" : "ansible-k8s2",
+      "ephemeral_id" : "z3pvlosMQoaCLyWJokqB2A",
+      "transport_address" : "192.168.29.102:9300",
+      "attributes" : { }
+    },
+    "ufKEnSXFSSWP0ZTfbhEMBA" : {
+      "name" : "ansible-k8s3",
+      "ephemeral_id" : "k-aCeulhQWiC7ZLYB8av7Q",
+      "transport_address" : "192.168.29.103:9300",
+      "attributes" : { }
+    }
+  }
+}
+
+#查看master
+[root@ansible-k8s1 data]# curl -XGET 'http://192.168.29.101:9200/_cluster/state/master_node?pretty'
+{
+  "cluster_name" : "k8s",
+  "master_node" : "j_Gv7OJFSS-wu_jLxw7wNQ"
+}
+
+#查看master
+[root@ansible-k8s1 data]# curl -XGET 'http://192.168.29.101:9200/_cat/master?v'
+id                     host           ip             node
+j_Gv7OJFSS-wu_jLxw7wNQ 192.168.29.101 192.168.29.101 ansible-k8s1
